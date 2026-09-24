@@ -1,5 +1,10 @@
 {
   "version": 2,
+  "functions": {
+    "api/index.py": {
+      "includeFiles": "knn_heart_model.pkl,heart_scaler.pkl,static/**,api/**"
+    }
+  },
   "rewrites": [
     {
       "source": "/(.*)",

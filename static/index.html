@@ -929,8 +929,7 @@
         };
 
         const resBox = document.getElementById('resultContainer');
-        resBox.style.display = 'block';
-
+        const analyzeBtn = document.getElementById('analyzeBtn');
         const gaugeFill = document.getElementById('gaugeFill');
         const scoreVal = document.getElementById('riskScoreVal');
         const riskBadge = document.getElementById('riskBadge');
@@ -938,6 +937,16 @@
         const benchmarkTag = document.getElementById('benchmarkTag');
         const factorsList = document.getElementById('factorsList');
         const recsList = document.getElementById('recsList');
+
+        resBox.style.display = 'block';
+        analyzeBtn.innerHTML = '<span>⏳</span> Computing Risk Intelligence...';
+        analyzeBtn.disabled = true;
+        scoreVal.textContent = '...';
+        riskHeadline.textContent = 'Evaluating Clinical Biomarkers...';
+        riskBadge.textContent = 'Processing';
+        riskBadge.style.background = 'rgba(59, 130, 246, 0.15)';
+        riskBadge.style.color = '#93C5FD';
+        riskBadge.style.border = '1px solid rgba(59, 130, 246, 0.35)';
 
         try {
             const res = await fetch('/api/analyze', {
@@ -948,10 +957,10 @@
             const data = await res.json();
 
             if (res.ok) {
-                const score = data.risk_score !== undefined ? data.risk_score : (data.elevated_pattern ? 85 : 15);
-                const level = data.risk_level || (data.elevated_pattern ? 'High' : 'Low');
+                const score = (typeof data.risk_score === 'number') ? data.risk_score : (parseFloat(data.risk_score) || (data.elevated_pattern ? 85.0 : 15.0));
+                const level = data.risk_level || (score >= 80 ? 'Critical' : (score >= 55 ? 'High' : (score >= 25 ? 'Moderate' : 'Low')));
 
-                scoreVal.textContent = score + '%';
+                scoreVal.textContent = score.toFixed(1) + '%';
                 benchmarkTag.textContent = data.accuracy_benchmark || 'Validated Multi-Model Ensemble';
 
                 // Configure Colors and Gauges
@@ -1007,9 +1016,22 @@
                 });
 
                 resBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            } else {
+                scoreVal.textContent = 'Error';
+                riskHeadline.textContent = 'Inference Server Error';
+                riskBadge.textContent = 'HTTP ' + res.status;
+                factorsList.innerHTML = '';
+                recsList.innerHTML = `<div class="rec-item"><span class="rec-icon">⚠️</span><span>${data.detail || 'The server encountered an error processing the clinical analysis.'}</span></div>`;
             }
         } catch (err) {
             console.error(err);
+            scoreVal.textContent = 'Offline';
+            riskHeadline.textContent = 'Connection Error';
+            riskBadge.textContent = 'Network';
+            recsList.innerHTML = '<div class="rec-item"><span class="rec-icon">⚠️</span><span>Could not reach prediction API. Please verify network connection or server status.</span></div>';
+        } finally {
+            analyzeBtn.innerHTML = '<svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg> Run Multi-Model Risk Intelligence';
+            analyzeBtn.disabled = false;
         }
     });
 

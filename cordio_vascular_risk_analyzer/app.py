@@ -13,15 +13,50 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parent
-(ROOT / "static").mkdir(parents=True, exist_ok=True)
 load_dotenv(ROOT / ".env")
 app = FastAPI(title="CardioCare")
-app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
+def find_resource(filename: str) -> Path:
+    candidates = [
+        ROOT / filename,
+        ROOT / "api" / filename,
+        ROOT / "cordio_vascular_risk_analyzer" / filename,
+        ROOT / "cordio_vascular_risk_analyzer" / "api" / filename,
+        Path.cwd() / filename,
+        Path.cwd() / "api" / filename,
+        Path.cwd() / "cordio_vascular_risk_analyzer" / filename,
+        Path.cwd() / "cordio_vascular_risk_analyzer" / "api" / filename,
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return ROOT / filename
+
+static_dir = find_resource("static")
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+_MODEL = None
+_SCALER = None
+
+def get_model_and_scaler():
+    global _MODEL, _SCALER
+    if _MODEL is None or _SCALER is None:
+        model_path = find_resource("knn_heart_model.pkl")
+        scaler_path = find_resource("heart_scaler.pkl")
+        if not model_path.exists() or not scaler_path.exists():
+            logging.error("Model files not found. Model path: %s, Scaler path: %s", model_path, scaler_path)
+            raise HTTPException(500, f"Model artifacts not found on server ({model_path.name})")
+        _MODEL = joblib.load(model_path)
+        _SCALER = joblib.load(scaler_path)
+    return _MODEL, _SCALER
 
 @app.get("/")
 def home():
-    return FileResponse(ROOT / "static" / "index.html")
+    index_file = find_resource("static/index.html")
+    if not index_file.exists():
+        index_file = find_resource("index.html")
+    return FileResponse(index_file)
 
 
 def parse_report(text: str) -> dict:
@@ -96,8 +131,7 @@ class Patient(BaseModel):
 
 @app.post("/api/analyze")
 def analyze(patient: Patient):
-    model = joblib.load(ROOT / "knn_heart_model.pkl")
-    scaler = joblib.load(ROOT / "heart_scaler.pkl")
+    model, scaler = get_model_and_scaler()
     p = patient.model_dump()
     raw = {
         "Age": p["age"],

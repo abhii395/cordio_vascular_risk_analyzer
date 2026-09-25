@@ -2,7 +2,8 @@
   "version": 2,
   "functions": {
     "api/index.py": {
-      "includeFiles": "knn_heart_model.pkl,heart_scaler.pkl,static/**,api/**"
+      "maxDuration": 30,
+      "includeFiles": "knn_heart_model.pkl,heart_scaler.pkl,api/knn_heart_model.pkl,api/heart_scaler.pkl,static/**"
     }
   },
   "rewrites": [

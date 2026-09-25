@@ -45,10 +45,19 @@ def get_model_and_scaler():
         model_path = find_resource("knn_heart_model.pkl")
         scaler_path = find_resource("heart_scaler.pkl")
         if not model_path.exists() or not scaler_path.exists():
-            logging.error("Model files not found. Model path: %s, Scaler path: %s", model_path, scaler_path)
-            raise HTTPException(500, f"Model artifacts not found on server ({model_path.name})")
-        _MODEL = joblib.load(model_path)
-        _SCALER = joblib.load(scaler_path)
+            searched = [str(c) for c in [
+                ROOT / "knn_heart_model.pkl",
+                ROOT / "api" / "knn_heart_model.pkl",
+                Path.cwd() / "knn_heart_model.pkl",
+                Path.cwd() / "api" / "knn_heart_model.pkl"
+            ]]
+            raise HTTPException(500, f"Model artifacts not found. Searched: {searched}")
+        try:
+            _MODEL = joblib.load(model_path)
+            _SCALER = joblib.load(scaler_path)
+        except Exception as e:
+            import traceback
+            raise HTTPException(500, f"Error deserializing model: {str(e)} | {traceback.format_exc()[-200:]}")
     return _MODEL, _SCALER
 
 @app.get("/")
@@ -131,88 +140,95 @@ class Patient(BaseModel):
 
 @app.post("/api/analyze")
 def analyze(patient: Patient):
-    model, scaler = get_model_and_scaler()
-    p = patient.model_dump()
-    raw = {
-        "Age": p["age"],
-        "RestingBP": p["resting_bp"],
-        "Cholesterol": p["cholesterol"],
-        "FastingBS": p["fasting_bs"],
-        "MaxHR": p["max_hr"],
-        "Oldpeak": p["oldpeak"],
-        "Sex_" + p["sex"]: 1,
-        "ChestPainType_" + p["chest_pain"]: 1,
-        "RestingECG_" + p["ecg"]: 1,
-        "ExerciseAngina_" + p["angina"]: 1,
-        "ST_Slope_" + p["st_slope"]: 1
-    }
-    frame = pd.DataFrame([raw]).reindex(columns=scaler.feature_names_in_, fill_value=0)
-    transformed_features = scaler.transform(frame)
-    
-    # Calculate probability if model supports predict_proba
-    if hasattr(model, "predict_proba"):
-        prob = float(model.predict_proba(transformed_features)[0][1])
-        prediction = int(prob >= 0.5)
-        risk_score = round(prob * 100, 1)
-    else:
-        prediction = int(model.predict(transformed_features)[0])
-        risk_score = 85.0 if prediction == 1 else 15.0
+    try:
+        model, scaler = get_model_and_scaler()
+        p = patient.model_dump()
+        raw = {
+            "Age": p["age"],
+            "RestingBP": p["resting_bp"],
+            "Cholesterol": p["cholesterol"],
+            "FastingBS": p["fasting_bs"],
+            "MaxHR": p["max_hr"],
+            "Oldpeak": p["oldpeak"],
+            "Sex_" + p["sex"]: 1,
+            "ChestPainType_" + p["chest_pain"]: 1,
+            "RestingECG_" + p["ecg"]: 1,
+            "ExerciseAngina_" + p["angina"]: 1,
+            "ST_Slope_" + p["st_slope"]: 1
+        }
+        frame = pd.DataFrame([raw]).reindex(columns=scaler.feature_names_in_, fill_value=0)
+        transformed_features = scaler.transform(frame)
 
-    # Determine risk category
-    if risk_score < 25:
-        risk_level = "Low"
-    elif risk_score < 55:
-        risk_level = "Moderate"
-    elif risk_score < 80:
-        risk_level = "High"
-    else:
-        risk_level = "Critical"
+        # Calculate probability if model supports predict_proba
+        if hasattr(model, "predict_proba"):
+            prob = float(model.predict_proba(transformed_features)[0][1])
+            prediction = int(prob >= 0.5)
+            risk_score = round(prob * 100, 1)
+        else:
+            prediction = int(model.predict(transformed_features)[0])
+            risk_score = 85.0 if prediction == 1 else 15.0
 
-    # Identify individual clinical risk contributors
-    factors = []
-    recommendations = []
+        # Determine risk category
+        if risk_score < 25:
+            risk_level = "Low"
+        elif risk_score < 55:
+            risk_level = "Moderate"
+        elif risk_score < 80:
+            risk_level = "High"
+        else:
+            risk_level = "Critical"
 
-    if p["cholesterol"] >= 240:
-        factors.append(f"High Serum Cholesterol ({p['cholesterol']} mg/dL > 240 threshold)")
-        recommendations.append("Adopt a Mediterranean/DASH heart-healthy diet low in saturated and trans fats; discuss lipid profile management with your physician.")
-    elif p["cholesterol"] >= 200:
-        factors.append(f"Borderline High Cholesterol ({p['cholesterol']} mg/dL)")
+        # Identify individual clinical risk contributors
+        factors = []
+        recommendations = []
 
-    if p["resting_bp"] >= 140:
-        factors.append(f"Stage 2 Hypertension BP ({p['resting_bp']} mmHg >= 140)")
-        recommendations.append("Regular blood pressure monitoring recommended; reduce dietary sodium and avoid chronic stress triggers.")
-    elif p["resting_bp"] >= 130:
-        factors.append(f"Elevated Blood Pressure ({p['resting_bp']} mmHg)")
+        if p["cholesterol"] >= 240:
+            factors.append(f"High Serum Cholesterol ({p['cholesterol']} mg/dL > 240 threshold)")
+            recommendations.append("Adopt a Mediterranean/DASH heart-healthy diet low in saturated and trans fats; discuss lipid profile management with your physician.")
+        elif p["cholesterol"] >= 200:
+            factors.append(f"Borderline High Cholesterol ({p['cholesterol']} mg/dL)")
 
-    if p["angina"] == "Y":
-        factors.append("Exercise-Induced Angina reported during exertion")
-        recommendations.append("Schedule a comprehensive cardiac stress test and myocardial perfusion scan under clinical supervision.")
+        if p["resting_bp"] >= 140:
+            factors.append(f"Stage 2 Hypertension BP ({p['resting_bp']} mmHg >= 140)")
+            recommendations.append("Regular blood pressure monitoring recommended; reduce dietary sodium and avoid chronic stress triggers.")
+        elif p["resting_bp"] >= 130:
+            factors.append(f"Elevated Blood Pressure ({p['resting_bp']} mmHg)")
 
-    if p["oldpeak"] >= 1.5:
-        factors.append(f"Significant ST Depression ({p['oldpeak']} mm Oldpeak)")
-        recommendations.append("Discuss ST segment changes with a cardiologist to rule out coronary artery ischemia.")
+        if p["angina"] == "Y":
+            factors.append("Exercise-Induced Angina reported during exertion")
+            recommendations.append("Schedule a comprehensive cardiac stress test and myocardial perfusion scan under clinical supervision.")
 
-    if p["st_slope"] in ("Flat", "Down"):
-        factors.append(f"Abnormal ST Slope morphology ({p['st_slope']})")
+        if p["oldpeak"] >= 1.5:
+            factors.append(f"Significant ST Depression ({p['oldpeak']} mm Oldpeak)")
+            recommendations.append("Discuss ST segment changes with a cardiologist to rule out coronary artery ischemia.")
 
-    if p["fasting_bs"] == 1:
-        factors.append("Elevated Fasting Blood Sugar (> 120 mg/dL)")
-        recommendations.append("Maintain glycemic control with routine HbA1c testing and balanced carbohydrate intake.")
+        if p["st_slope"] in ("Flat", "Down"):
+            factors.append(f"Abnormal ST Slope morphology ({p['st_slope']})")
 
-    if p["max_hr"] < (220 - p["age"]) * 0.7:
-        factors.append("Sub-target peak heart rate achieved")
+        if p["fasting_bs"] == 1:
+            factors.append("Elevated Fasting Blood Sugar (> 120 mg/dL)")
+            recommendations.append("Maintain glycemic control with routine HbA1c testing and balanced carbohydrate intake.")
 
-    if not recommendations:
-        recommendations.append("Continue routine preventive cardiology screenings, maintain 150+ minutes of moderate weekly exercise, and prioritize balanced nutrition.")
+        if p["max_hr"] < (220 - p["age"]) * 0.7:
+            factors.append("Sub-target peak heart rate achieved")
 
-    return {
-        "elevated_pattern": bool(prediction == 1),
-        "risk_score": risk_score,
-        "risk_level": risk_level,
-        "key_factors": factors,
-        "recommendations": recommendations,
-        "accuracy_benchmark": "86.2% Accuracy / 91.8% ROC-AUC (Multi-Model Ensemble)"
-    }
+        if not recommendations:
+            recommendations.append("Continue routine preventive cardiology screenings, maintain 150+ minutes of moderate weekly exercise, and prioritize balanced nutrition.")
+
+        return {
+            "elevated_pattern": bool(prediction == 1),
+            "risk_score": risk_score,
+            "risk_level": risk_level,
+            "key_factors": factors,
+            "recommendations": recommendations,
+            "accuracy_benchmark": "86.2% Accuracy / 91.8% ROC-AUC (Multi-Model Ensemble)"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logging.error("Analysis failure: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
 
 
 class ChatRequest(BaseModel):
